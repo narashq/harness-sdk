@@ -1,7 +1,8 @@
-// Parity mirror of strands-py/tests/strands/models/test_strict_schema.py.
-// Keep the cases aligned with the Python file so the two SDKs stay in parity.
+// Covers the cases in strands-py/tests/strands/models/test_strict_schema.py. The TS transform
+// also terminates recursive $refs, closes union and additionalProperties object schemas, and
+// keeps a $ref target's additionalProperties, which the Python transform does not.
 import { describe, it, expect, vi } from 'vitest'
-import { ensureStrictJsonSchema, findUnsupportedStrictKeywords } from '../_strict-schema.js'
+import { ensureStrictJsonSchema, findUnsupportedStrictKeywords } from '../strict-schema.js'
 import { deepCopy } from '../../types/json.js'
 import type { JSONSchema } from '../../types/json.js'
 import { logger } from '../../logging/logger.js'
@@ -50,10 +51,10 @@ describe('ensureStrictJsonSchema', () => {
       )
     )
 
-    expect(result['additionalProperties']).toBe(false)
-    expect((result['$defs'] as Record<string, unknown>)['MyItem']).toEqual({
+    expect(result).toEqual({
       type: 'object',
-      properties: { name: { type: 'string' } },
+      properties: { item: { $ref: '#/$defs/MyItem' } },
+      $defs: { MyItem: { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: false } },
       additionalProperties: false,
     })
   })
@@ -69,10 +70,12 @@ describe('ensureStrictJsonSchema', () => {
       )
     )
 
-    expect(result['additionalProperties']).toBe(false)
-    expect((result['definitions'] as Record<string, unknown>)['MyItem']).toEqual({
+    expect(result).toEqual({
       type: 'object',
-      properties: { name: { type: 'string' } },
+      properties: { item: { $ref: '#/definitions/MyItem' } },
+      definitions: {
+        MyItem: { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: false },
+      },
       additionalProperties: false,
     })
   })
@@ -180,18 +183,14 @@ describe('ensureStrictJsonSchema', () => {
     })
   })
 
-  it('leaves required alone by default and sets all properties when requireAllProperties is true', () => {
+  it('leaves required unchanged', () => {
     const input = schema({
       type: 'object',
       properties: { required_field: { type: 'string' }, optional_field: { type: 'string' } },
       required: ['required_field'],
     })
 
-    const without = asRecord(ensureStrictJsonSchema(input))
-    expect(without['required']).toEqual(['required_field'])
-
-    const withAll = asRecord(ensureStrictJsonSchema(input, true))
-    expect(new Set(withAll['required'] as string[])).toEqual(new Set(['required_field', 'optional_field']))
+    expect(asRecord(ensureStrictJsonSchema(input))['required']).toEqual(['required_field'])
   })
 
   it('preserves an existing additionalProperties: true', () => {
@@ -344,6 +343,34 @@ describe('ensureStrictJsonSchema', () => {
       additionalProperties: { type: 'string' },
     })
   })
+  it('does not resolve a $ref through the prototype chain', () => {
+    const result = asRecord(
+      ensureStrictJsonSchema(
+        schema({ type: 'object', properties: { x: { $ref: '#/$defs/__proto__', description: 'd' } }, $defs: {} })
+      )
+    )
+
+    expect((result['properties'] as Record<string, unknown>)['x']).toEqual({
+      $ref: '#/$defs/__proto__',
+      description: 'd',
+    })
+  })
+
+  it('keeps an inlined __proto__ key as an own property and still closes the node', () => {
+    const result = asRecord(
+      ensureStrictJsonSchema(
+        JSON.parse(
+          '{"type":"object","properties":{"x":{"$ref":"#/$defs/Item","description":"d"}},' +
+            '"$defs":{"Item":{"type":"object","__proto__":{"additionalProperties":true}}}}'
+        ) as JSONSchema
+      )
+    )
+    const x = (result['properties'] as Record<string, Record<string, unknown>>)['x']!
+
+    expect(Object.getPrototypeOf(x)).toBe(Object.prototype)
+    expect(Object.hasOwn(x, 'additionalProperties')).toBe(true)
+    expect(x['additionalProperties']).toBe(false)
+  })
 })
 
 describe('findUnsupportedStrictKeywords', () => {
@@ -365,6 +392,7 @@ describe('findUnsupportedStrictKeywords', () => {
         properties: {
           headers: { type: 'object', additionalProperties: { type: 'string', maxLength: 10 } },
           count: { type: 'integer', minimum: 0, maximum: 5 },
+          timeout: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 60 },
           tags: { type: 'array', items: { type: 'string', minLength: 1 } },
         },
         $defs: { Step: { type: 'number', multipleOf: 2, minimum: 1 } },
@@ -372,7 +400,16 @@ describe('findUnsupportedStrictKeywords', () => {
       })
     )
 
-    expect(keywords).toEqual(['additionalProperties', 'maxLength', 'maximum', 'minLength', 'minimum', 'multipleOf'])
+    expect(keywords).toEqual([
+      'additionalProperties',
+      'exclusiveMaximum',
+      'exclusiveMinimum',
+      'maxLength',
+      'maximum',
+      'minLength',
+      'minimum',
+      'multipleOf',
+    ])
   })
 
   it('does not treat property names as keywords', () => {

@@ -737,8 +737,8 @@ describe('BedrockModel', () => {
       ])
     })
 
-    // Parity mirror of the strict_tools cases in strands-py test_bedrock.py.
-    // Keep aligned with the Python file so the two SDKs stay in parity.
+    // Covers the strict_tools cases in strands-py test_bedrock.py, plus the TS-only
+    // unsupported-keyword warning.
     describe('strictTools', () => {
       const toolSpec = (inputSchema: object) => ({
         name: 'calc',

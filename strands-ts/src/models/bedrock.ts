@@ -69,7 +69,7 @@ import { ensureDefined } from '../types/validation.js'
 import { logger } from '../logging/logger.js'
 import { warnOnce } from '../logging/warn-once.js'
 import { NOOP_TOOL_SPEC } from '../tools/noop-tool.js'
-import { ensureStrictJsonSchema, findUnsupportedStrictKeywords } from './_strict-schema.js'
+import { ensureStrictJsonSchema, findUnsupportedStrictKeywords } from './strict-schema.js'
 import { MODEL_DEFAULTS, defaultModelWarningMessage } from './defaults.js'
 
 const DEFAULT_BEDROCK_REGION_SUPPORTS_FIP = false

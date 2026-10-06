@@ -16,14 +16,14 @@ function isRecord(value: JSONValue | undefined): value is SchemaNode {
 }
 
 /**
- * Return a deep copy of `schema` with strict-mode constraints applied recursively:
- * `additionalProperties: false` on object types, and (only if `requireAllProperties`, which
- * OpenAI needs but Bedrock/Anthropic do not) all properties marked required. The original is
- * not mutated.
+ * Return a deep copy of `schema` with `additionalProperties: false` applied recursively to
+ * object types. The original is not mutated.
+ *
+ * @internal
  */
-export function ensureStrictJsonSchema(schema: JSONSchema, requireAllProperties = false): JSONSchema {
+export function ensureStrictJsonSchema(schema: JSONSchema): JSONSchema {
   const schemaCopy = JSON.parse(JSON.stringify(schema)) as SchemaNode
-  applyStrict(schemaCopy, schemaCopy, requireAllProperties)
+  applyStrict(schemaCopy, schemaCopy)
   return schemaCopy as JSONSchema
 }
 
@@ -35,7 +35,15 @@ const SCHEMA_LIST_KEYWORDS = ['anyOf', 'allOf', 'oneOf']
 const SCHEMA_VALUE_KEYWORDS = ['items', 'additionalProperties']
 
 /** Keywords outside Bedrock's strict-mode subset that the transform does not rewrite. */
-const UNSUPPORTED_STRICT_KEYWORDS = ['minimum', 'maximum', 'multipleOf', 'minLength', 'maxLength']
+const UNSUPPORTED_STRICT_KEYWORDS = [
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minLength',
+  'maxLength',
+]
 
 /** Return the direct subschemas of `schema`, including `$defs`/`definitions` entries. */
 function childSchemas(schema: SchemaNode): SchemaNode[] {
@@ -63,24 +71,14 @@ function isObjectType(schema: SchemaNode): boolean {
  * Apply strict-mode constraints to `schema` in place. `root` resolves `$ref` pointers; `inlining`
  * holds the refs being inlined on the current path so recursive refs terminate.
  */
-function applyStrict(
-  schema: SchemaNode,
-  root: SchemaNode,
-  requireAllProperties: boolean,
-  inlining: ReadonlySet<string> = new Set()
-): void {
+function applyStrict(schema: SchemaNode, root: SchemaNode, inlining: ReadonlySet<string> = new Set()): void {
   // A node still carrying a $ref is left for the inline below, so the target's own value wins.
-  if (isObjectType(schema) && !('additionalProperties' in schema) && !('$ref' in schema)) {
+  if (isObjectType(schema) && !Object.hasOwn(schema, 'additionalProperties') && !Object.hasOwn(schema, '$ref')) {
     schema['additionalProperties'] = false
   }
 
-  const properties = schema['properties']
-  if (requireAllProperties && isRecord(properties)) {
-    schema['required'] = Object.keys(properties)
-  }
-
   for (const child of childSchemas(schema)) {
-    applyStrict(child, root, requireAllProperties, inlining)
+    applyStrict(child, root, inlining)
   }
 
   // A $ref alongside sibling keys must be inlined; existing keys win over the resolved schema.
@@ -101,8 +99,9 @@ function applyStrict(
   for (const key of Object.keys(schema)) {
     delete schema[key]
   }
-  Object.assign(schema, merged)
-  applyStrict(schema, root, requireAllProperties, new Set(inlining).add(ref))
+  // defineProperties keeps a `__proto__` key as an own property instead of invoking the setter.
+  Object.defineProperties(schema, Object.getOwnPropertyDescriptors(merged))
+  applyStrict(schema, root, new Set(inlining).add(ref))
 }
 
 /**
@@ -119,9 +118,9 @@ export function findUnsupportedStrictKeywords(schema: JSONSchema): string[] {
 
 function collectUnsupportedKeywords(schema: SchemaNode, found: Set<string>): void {
   for (const keyword of UNSUPPORTED_STRICT_KEYWORDS) {
-    if (keyword in schema) found.add(keyword)
+    if (Object.hasOwn(schema, keyword)) found.add(keyword)
   }
-  if ('additionalProperties' in schema && schema['additionalProperties'] !== false) {
+  if (Object.hasOwn(schema, 'additionalProperties') && schema['additionalProperties'] !== false) {
     found.add('additionalProperties')
   }
   for (const child of childSchemas(schema)) {
@@ -139,7 +138,7 @@ function resolveRef(root: SchemaNode, ref: string): SchemaNode | null {
   const path = ref.slice(2).split('/')
   let current: JSONValue = root
   for (const key of path) {
-    if (!isRecord(current) || !(key in current)) {
+    if (!isRecord(current) || !Object.hasOwn(current, key)) {
       logger.warn(`ref=<${ref}> | failed to resolve $ref path`)
       return null
     }
