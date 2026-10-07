@@ -95,6 +95,29 @@ async def test_fast_command_completes_under_timeout():
 
 
 @pytest.mark.asyncio
+async def test_multibyte_utf8_split_across_reads_decodes_cleanly():
+    # Regression guard for #4461. A UTF-8 character straddling a pipe read
+    # boundary must not be decoded as two invalid halves. The child writes
+    # 'café☕' split mid-'é' (printf octal escapes: é = \303\251, ☕ = \342\230\225),
+    # pausing so each half lands in its own read.
+    script = "printf 'caf\\303'; sleep 0.1; printf '\\251\\342\\230\\225'"
+    chunks, result = await _collect(_stream_process("sh", ["-c", script]))
+    assert result.stdout == "café☕"
+    streamed = "".join(c.data for c in chunks if c.stream_type == "stdout")
+    assert streamed == "café☕"
+
+
+@pytest.mark.asyncio
+async def test_trailing_partial_utf8_flushed_at_eof():
+    # A child that exits mid-character still surfaces the dangling bytes as a
+    # single U+FFFD instead of dropping them (#4461).
+    chunks, result = await _collect(_stream_process("sh", ["-c", "printf 'ok\\303'"]))
+    assert result.stdout == "ok�"
+    streamed = "".join(c.data for c in chunks if c.stream_type == "stdout")
+    assert streamed == "ok�"
+
+
+@pytest.mark.asyncio
 async def test_enoent_with_message_returns_127():
     _, result = await _collect(
         _stream_process("definitely_not_a_real_binary_xyz", [], enoent_message="nope not installed")
